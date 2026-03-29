@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eigenspectrum Viewer - SFT vs SDFT</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .header {
+            background: #16213e;
+            padding: 20px;
+            border-bottom: 2px solid #0f3460;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+        .header p {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        .controls {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            background: #16213e;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .control-group label {
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+        }
+        select, button {
+            padding: 10px 15px;
+            border: 1px solid #0f3460;
+            border-radius: 5px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        select:hover, button:hover {
+            border-color: #e94560;
+        }
+        button {
+            background: #e94560;
+            border: none;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #ff6b6b;
+        }
+        .main-content {
+            padding: 20px;
+        }
+        .plot-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .plot-box {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 15px;
+            border: 1px solid #0f3460;
+        }
+        .plot-box h3 {
+            font-size: 1rem;
+            margin-bottom: 10px;
+            color: #e94560;
+        }
+        .plot-box.sft h3 {
+            color: #4ecdc4;
+        }
+        .plot-box.sdft h3 {
+            color: #ff6b6b;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .stat-item {
+            background: #1a1a2e;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .stat-item .value {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #fff;
+        }
+        .stat-item .label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .comparison-table th, .comparison-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #0f3460;
+        }
+        .comparison-table th {
+            background: #0f3460;
+            color: #e94560;
+        }
+        .comparison-table tr:hover {
+            background: #1a1a2e;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #888;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .tab.active {
+            background: #e94560;
+            border-color: #e94560;
+        }
+        .layer-slider {
+            flex: 1;
+            max-width: 300px;
+        }
+        .layer-slider input[type="range"] {
+            width: 100%;
+            margin-top: 5px;
+        }
+        .layer-value {
+            display: inline-block;
+            background: #e94560;
+            padding: 5px 10px;
+            border-radius: 3px;
+            min-width: 40px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Eigenspectrum Viewer</h1>
+        <p>Compare Hessian eigenspectrum between SFT and SDFT trained models</p>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>Task / Checkpoint</label>
+            <select id="task-select">
+                {% for key, name in tasks.items() %}
+                <option value="{{ key }}">{{ name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="control-group layer-slider">
+            <label>Layer: <span class="layer-value" id="layer-value">0</span></label>
+            <input type="range" id="layer-slider" min="0" max="35" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>Parameter</label>
+            <select id="param-select">
+                {% for param in params %}
+                <option value="{{ param }}">{{ param }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>&nbsp;</label>
+            <button id="load-btn">Load Spectrum</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="tabs">
+            <div class="tab active" data-tab="comparison">Side-by-Side</div>
+            <div class="tab" data-tab="overlay">Overlay</div>
+            <div class="tab" data-tab="cross-layer">Cross-Layer</div>
+        </div>
+
+        <div id="comparison-view">
+            <div class="plot-container">
+                <div class="plot-box sft">
+                    <h3>SFT - Eigenvalue Histogram</h3>
+                    <div id="sft-density-plot" style="height: 300px;"></div>
+                    <div class="stats-grid" id="sft-stats"></div>
+                </div>
+                <div class="plot-box sdft">
+                    <h3>SDFT - Eigenvalue Histogram</h3>
+                    <div id="sdft-density-plot" style="height: 300px;"></div>
+                    <div class="stats-grid" id="sdft-stats"></div>
+                </div>
+            </div>
+
+            <div class="plot-container">
+                <div class="plot-box sft">
+                    <h3>SFT - Log Density Histogram</h3>
+                    <div id="sft-log-density-plot" style="height: 300px;"></div>
+                </div>
+                <div class="plot-box sdft">
+                    <h3>SDFT - Log Density Histogram</h3>
+                    <div id="sdft-log-density-plot" style="height: 300px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="overlay-view" style="display: none;">
+            <div class="plot-box full-width">
+                <h3>Eigenvalue Histogram Comparison (Overlay)</h3>
+                <div id="overlay-plot" style="height: 400px;"></div>
+            </div>
+            <div class="plot-box full-width" style="margin-top: 20px;">
+                <h3>Log Density Histogram Comparison (Overlay)</h3>
+                <div id="overlay-log-plot" style="height: 400px;"></div>
+            </div>
+        </div>
+
+        <div id="cross-layer-view" style="display: none;">
+            <div class="plot-container">
+                <div class="plot-box full-width">
+                    <h3>Top Eigenvalue Across Layers</h3>
+                    <div id="cross-layer-top-eig" style="height: 350px;"></div>
+                </div>
+            </div>
+            <div class="plot-container">
+                <div class="plot-box full-width">
+                    <h3>Effective Rank Across Layers</h3>
+                    <div id="cross-layer-eff-rank" style="height: 350px;"></div>
+                </div>
+            </div>
+            <div class="plot-container">
+                <div class="plot-box full-width">
+                    <h3>Trace Estimate Across Layers</h3>
+                    <div id="cross-layer-trace" style="height: 350px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const plotLayout = {
+            paper_bgcolor: '#16213e',
+            plot_bgcolor: '#1a1a2e',
+            font: { color: '#eee' },
+            margin: { t: 30, r: 30, b: 50, l: 60 },
+            xaxis: { gridcolor: '#0f3460', zerolinecolor: '#0f3460' },
+            yaxis: { gridcolor: '#0f3460', zerolinecolor: '#0f3460' },
+        };
+
+        const sftColor = '#4ecdc4';
+        const sdftColor = '#ff6b6b';
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                const tabName = tab.dataset.tab;
+                document.getElementById('comparison-view').style.display = tabName === 'comparison' ? 'block' : 'none';
+                document.getElementById('overlay-view').style.display = tabName === 'overlay' ? 'block' : 'none';
+                document.getElementById('cross-layer-view').style.display = tabName === 'cross-layer' ? 'block' : 'none';
+
+                if (tabName === 'cross-layer') {
+                    loadCrossLayerData();
+                }
+            });
+        });
+
+        // Layer slider
+        const layerSlider = document.getElementById('layer-slider');
+        const layerValue = document.getElementById('layer-value');
+        layerSlider.addEventListener('input', () => {
+            layerValue.textContent = layerSlider.value;
+        });
+
+        // Load button
+        document.getElementById('load-btn').addEventListener('click', loadSpectrum);
+
+        // Auto-load on selection change
+        document.getElementById('task-select').addEventListener('change', updateLayers);
+        document.getElementById('param-select').addEventListener('change', loadSpectrum);
+        layerSlider.addEventListener('change', loadSpectrum);
+
+        async function updateLayers() {
+            const task = document.getElementById('task-select').value;
+            const response = await fetch(`/api/layers?task=${task}`);
+            const data = await response.json();
+
+            const maxLayer = Math.max(...data.common_layers, 0);
+            layerSlider.max = maxLayer;
+            if (parseInt(layerSlider.value) > maxLayer) {
+                layerSlider.value = 0;
+                layerValue.textContent = '0';
+            }
+
+            loadSpectrum();
+        }
+
+        async function loadSpectrum() {
+            const task = document.getElementById('task-select').value;
+            const layer = document.getElementById('layer-slider').value;
+            const param = document.getElementById('param-select').value;
+
+            const response = await fetch(`/api/spectrum?task=${task}&layer=${layer}&param=${param}`);
+            const data = await response.json();
+
+            plotDensity(data);
+            updateStats(data);
+        }
+
+        // Helper function to bin eigenvalues into histogram with optional fixed range
+        function binEigenvalues(eigenvalues, numBins = 50, fixedMin = null, fixedMax = null) {
+            if (!eigenvalues || eigenvalues.length === 0) return { bins: [], density: [], logDensity: [] };
+
+            const min = fixedMin !== null ? fixedMin : Math.min(...eigenvalues);
+            const max = fixedMax !== null ? fixedMax : Math.max(...eigenvalues);
+            const binWidth = (max - min) / numBins;
+
+            const counts = new Array(numBins).fill(0);
+            const bins = new Array(numBins);
+
+            for (let i = 0; i < numBins; i++) {
+                bins[i] = min + (i + 0.5) * binWidth;
+            }
+
+            for (const val of eigenvalues) {
+                const idx = Math.min(Math.max(Math.floor((val - min) / binWidth), 0), numBins - 1);
+                counts[idx]++;
+            }
+
+            // Normalize to density
+            const total = eigenvalues.length * binWidth;
+            const density = counts.map(c => c / total);
+            const logDensity = density.map(d => d > 0 ? Math.log10(d) : null);
+
+            return { bins, density, logDensity, min, max };
+        }
+
+        function plotDensity(data) {
+            const numBins = 200;
+
+            // First, compute shared eigenvalue range from both datasets
+            let globalMin = Infinity, globalMax = -Infinity;
+
+            if (data.sft && data.sft.eigenvalues && data.sft.eigenvalues.length > 0) {
+                globalMin = Math.min(globalMin, Math.min(...data.sft.eigenvalues));
+                globalMax = Math.max(globalMax, Math.max(...data.sft.eigenvalues));
+            }
+            if (data.sdft && data.sdft.eigenvalues && data.sdft.eigenvalues.length > 0) {
+                globalMin = Math.min(globalMin, Math.min(...data.sdft.eigenvalues));
+                globalMax = Math.max(globalMax, Math.max(...data.sdft.eigenvalues));
+            }
+
+            // Bin both datasets using the same range
+            const sftHist = (data.sft && data.sft.eigenvalues) ? binEigenvalues(data.sft.eigenvalues, numBins, globalMin, globalMax) : null;
+            const sdftHist = (data.sdft && data.sdft.eigenvalues) ? binEigenvalues(data.sdft.eigenvalues, numBins, globalMin, globalMax) : null;
+
+            // Calculate shared y-axis ranges
+            let yMaxDensity = 0, yMinLog = Infinity, yMaxLog = -Infinity;
+
+            if (sftHist) {
+                yMaxDensity = Math.max(yMaxDensity, Math.max(...sftHist.density));
+                const validLogSft = sftHist.logDensity.filter(d => d !== null);
+                if (validLogSft.length > 0) {
+                    yMinLog = Math.min(yMinLog, Math.min(...validLogSft));
+                    yMaxLog = Math.max(yMaxLog, Math.max(...validLogSft));
+                }
+            }
+            if (sdftHist) {
+                yMaxDensity = Math.max(yMaxDensity, Math.max(...sdftHist.density));
+                const validLogSdft = sdftHist.logDensity.filter(d => d !== null);
+                if (validLogSdft.length > 0) {
+                    yMinLog = Math.min(yMinLog, Math.min(...validLogSdft));
+                    yMaxLog = Math.max(yMaxLog, Math.max(...validLogSdft));
+                }
+            }
+
+            // Add padding to ranges
+            const xPadding = (globalMax - globalMin) * 0.05;
+            const yDensityPadding = yMaxDensity * 0.1;
+            const yLogPadding = (yMaxLog - yMinLog) * 0.1;
+
+            const sharedXRange = [globalMin - xPadding, globalMax + xPadding];
+            const sharedYDensityRange = [0, yMaxDensity + yDensityPadding];
+            const sharedYLogRange = [yMinLog - yLogPadding, yMaxLog + yLogPadding];
+
+            // SFT histogram
+            if (sftHist) {
+                Plotly.newPlot('sft-density-plot', [{
+                    x: sftHist.bins,
+                    y: sftHist.density,
+                    type: 'bar',
+                    marker: {
+                        color: sftColor,
+                        line: { color: sftColor, width: 1 }
+                    },
+                }], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue', range: sharedXRange },
+                    yaxis: { ...plotLayout.yaxis, title: 'Density', range: sharedYDensityRange },
+                    bargap: 0.05,
+                }, { responsive: true });
+
+                // Log density histogram
+                Plotly.newPlot('sft-log-density-plot', [{
+                    x: sftHist.bins.filter((_, i) => sftHist.logDensity[i] !== null),
+                    y: sftHist.logDensity.filter(d => d !== null),
+                    type: 'bar',
+                    marker: {
+                        color: sftColor,
+                        line: { color: sftColor, width: 1 }
+                    },
+                }], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue', range: sharedXRange },
+                    yaxis: { ...plotLayout.yaxis, title: 'Log10(Density)', range: sharedYLogRange },
+                    bargap: 0.05,
+                }, { responsive: true });
+            }
+
+            // SDFT histogram
+            if (sdftHist) {
+                Plotly.newPlot('sdft-density-plot', [{
+                    x: sdftHist.bins,
+                    y: sdftHist.density,
+                    type: 'bar',
+                    marker: {
+                        color: sdftColor,
+                        line: { color: sdftColor, width: 1 }
+                    },
+                }], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue', range: sharedXRange },
+                    yaxis: { ...plotLayout.yaxis, title: 'Density', range: sharedYDensityRange },
+                    bargap: 0.05,
+                }, { responsive: true });
+
+                // Log density histogram
+                Plotly.newPlot('sdft-log-density-plot', [{
+                    x: sdftHist.bins.filter((_, i) => sdftHist.logDensity[i] !== null),
+                    y: sdftHist.logDensity.filter(d => d !== null),
+                    type: 'bar',
+                    marker: {
+                        color: sdftColor,
+                        line: { color: sdftColor, width: 1 }
+                    },
+                }], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue', range: sharedXRange },
+                    yaxis: { ...plotLayout.yaxis, title: 'Log10(Density)', range: sharedYLogRange },
+                    bargap: 0.05,
+                }, { responsive: true });
+            }
+
+            // Overlay histograms (reuse already computed histograms)
+            if (sftHist && sdftHist) {
+                Plotly.newPlot('overlay-plot', [
+                    {
+                        x: sftHist.bins,
+                        y: sftHist.density,
+                        type: 'bar',
+                        name: 'SFT',
+                        marker: { color: sftColor, opacity: 0.7 },
+                    },
+                    {
+                        x: sdftHist.bins,
+                        y: sdftHist.density,
+                        type: 'bar',
+                        name: 'SDFT',
+                        marker: { color: sdftColor, opacity: 0.7 },
+                    }
+                ], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue' },
+                    yaxis: { ...plotLayout.yaxis, title: 'Density' },
+                    barmode: 'overlay',
+                    showlegend: true,
+                    legend: { x: 0.8, y: 0.95 },
+                }, { responsive: true });
+
+                Plotly.newPlot('overlay-log-plot', [
+                    {
+                        x: sftHist.bins.filter((_, i) => sftHist.logDensity[i] !== null),
+                        y: sftHist.logDensity.filter(d => d !== null),
+                        type: 'bar',
+                        name: 'SFT',
+                        marker: { color: sftColor, opacity: 0.7 },
+                    },
+                    {
+                        x: sdftHist.bins.filter((_, i) => sdftHist.logDensity[i] !== null),
+                        y: sdftHist.logDensity.filter(d => d !== null),
+                        type: 'bar',
+                        name: 'SDFT',
+                        marker: { color: sdftColor, opacity: 0.7 },
+                    }
+                ], {
+                    ...plotLayout,
+                    xaxis: { ...plotLayout.xaxis, title: 'Eigenvalue' },
+                    yaxis: { ...plotLayout.yaxis, title: 'Log10(Density)' },
+                    barmode: 'overlay',
+                    showlegend: true,
+                    legend: { x: 0.8, y: 0.95 },
+                }, { responsive: true });
+            }
+        }
+
+        function updateStats(data) {
+            if (data.sft) {
+                document.getElementById('sft-stats').innerHTML = `
+                    <div class="stat-item">
+                        <div class="value">${data.sft.top_eigenvalue.toExponential(2)}</div>
+                        <div class="label">Top Eigenvalue</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value">${data.sft.effective_rank.toFixed(1)}</div>
+                        <div class="label">Effective Rank</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value">${data.sft.trace_estimate.toExponential(2)}</div>
+                        <div class="label">Trace</div>
+                    </div>
+                `;
+            }
+            if (data.sdft) {
+                document.getElementById('sdft-stats').innerHTML = `
+                    <div class="stat-item">
+                        <div class="value">${data.sdft.top_eigenvalue.toExponential(2)}</div>
+                        <div class="label">Top Eigenvalue</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value">${data.sdft.effective_rank.toFixed(1)}</div>
+                        <div class="label">Effective Rank</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value">${data.sdft.trace_estimate.toExponential(2)}</div>
+                        <div class="label">Trace</div>
+                    </div>
+                `;
+            }
+        }
+
+        async function loadCrossLayerData() {
+            const task = document.getElementById('task-select').value;
+            const param = document.getElementById('param-select').value;
+
+            const response = await fetch(`/api/cross_layer?task=${task}&param=${param}`);
+            const data = await response.json();
+
+            // Top eigenvalue plot
+            Plotly.newPlot('cross-layer-top-eig', [
+                {
+                    x: data.sft.layers,
+                    y: data.sft.top_eig,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SFT',
+                    line: { color: sftColor, width: 2 },
+                    marker: { size: 6 },
+                },
+                {
+                    x: data.sdft.layers,
+                    y: data.sdft.top_eig,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SDFT',
+                    line: { color: sdftColor, width: 2 },
+                    marker: { size: 6 },
+                }
+            ], {
+                ...plotLayout,
+                xaxis: { ...plotLayout.xaxis, title: 'Layer' },
+                yaxis: { ...plotLayout.yaxis, title: 'Top Eigenvalue', type: 'log' },
+                showlegend: true,
+                legend: { x: 0.8, y: 0.95 },
+            }, { responsive: true });
+
+            // Effective rank plot
+            Plotly.newPlot('cross-layer-eff-rank', [
+                {
+                    x: data.sft.layers,
+                    y: data.sft.eff_rank,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SFT',
+                    line: { color: sftColor, width: 2 },
+                    marker: { size: 6 },
+                },
+                {
+                    x: data.sdft.layers,
+                    y: data.sdft.eff_rank,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SDFT',
+                    line: { color: sdftColor, width: 2 },
+                    marker: { size: 6 },
+                }
+            ], {
+                ...plotLayout,
+                xaxis: { ...plotLayout.xaxis, title: 'Layer' },
+                yaxis: { ...plotLayout.yaxis, title: 'Effective Rank' },
+                showlegend: true,
+                legend: { x: 0.8, y: 0.95 },
+            }, { responsive: true });
+
+            // Trace plot
+            Plotly.newPlot('cross-layer-trace', [
+                {
+                    x: data.sft.layers,
+                    y: data.sft.trace,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SFT',
+                    line: { color: sftColor, width: 2 },
+                    marker: { size: 6 },
+                },
+                {
+                    x: data.sdft.layers,
+                    y: data.sdft.trace,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'SDFT',
+                    line: { color: sdftColor, width: 2 },
+                    marker: { size: 6 },
+                }
+            ], {
+                ...plotLayout,
+                xaxis: { ...plotLayout.xaxis, title: 'Layer' },
+                yaxis: { ...plotLayout.yaxis, title: 'Trace Estimate', type: 'log' },
+                showlegend: true,
+                legend: { x: 0.8, y: 0.95 },
+            }, { responsive: true });
+        }
+
+        // Initial load
+        updateLayers();
+    </script>
+</body>
+</html>

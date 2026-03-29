@@ -1,8 +1,11 @@
 .vscode/
 __pycache__/
 *.pyc
-
+.idea
+data/*
+eigenspectrum/CL_note.pdf
 wandb/
 results/
+eigenspectrum/outputs/
 bsub_outputs/
 .hyperparameter_search_scripts_main/

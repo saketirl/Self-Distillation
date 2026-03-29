@@ -50,7 +50,15 @@ from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_c
 from trl.extras.profiling import profiling_context, profiling_decorator
 from trl.extras.vllm_client import VLLMClient
 from trl.import_utils import is_liger_kernel_available, is_vllm_available
-from trl.models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from trl.models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+try:
+    from trl.models import prepare_peft_model
+except ImportError:
+    # prepare_peft_model not available in this TRL version, provide fallback
+    def prepare_peft_model(model, peft_config, args):
+        if peft_config is not None:
+            raise ImportError("PEFT support requires a newer TRL version with prepare_peft_model")
+        return model
 from trl.models.utils import _ForwardRedirection
 from trl.trainer.base_trainer import BaseTrainer
 from distil_config import DistilConfig

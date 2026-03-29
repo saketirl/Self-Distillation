@@ -63,9 +63,9 @@ if __name__ == "__main__":
         seed=args.seed,
         use_vllm = True,
         vllm_mode="colocate",
-        vllm_tensor_parallel_size=1, 
+        vllm_tensor_parallel_size=1,
         vllm_gpu_memory_utilization=0.3,
-        vllm_enable_sleep_mode=True, 
+        vllm_enable_sleep_mode=True,
         learning_rate = args.learning_rate,
         warmup_ratio = 0.1,
         lr_scheduler_type = "cosine",
@@ -87,6 +87,11 @@ if __name__ == "__main__":
         ref_model_mixup_alpha = args.ref_model_mixup_alpha,
         vllm_importance_sampling_correction = True,
         num_loss_tokens_to_skip = 3,
+        # Multi-GPU settings
+        fsdp = "full_shard auto_wrap",
+        fsdp_config = {
+            "fsdp_transformer_layer_cls_to_wrap": ["Qwen2DecoderLayer"],
+        },
     )
     trainer = DistilTrainer(
         model=model,
