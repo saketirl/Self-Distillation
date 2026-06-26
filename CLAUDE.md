@@ -332,3 +332,196 @@ The scaling sweep in `scaling-data/wandb-export-scaling.csv` used the **opposite
 direction (`lr × √d` and `lr × L`), so larger/deeper configs ran with too-high LRs.
 Results from that sweep are confounded — re-run with corrected scaling before
 drawing architecture conclusions.
+
+---
+
+## Test Suite — Optimizers and Continual Learning
+
+All tests live in `tests/`. Run with `python -m pytest tests/ -s`.
+
+### Optimizer Intuitions
+
+#### FeaturePreservingMuon (FPMuon)
+`frozen_residual_ubv/feature_preserving_muon.py`
+
+**Idea**: Each weight W encodes task features primarily in its dominant right singular
+vectors V_r (the directions of input space that W responds to most strongly). After
+training task 0, snap V_r from the weights and force all future gradient updates to
+satisfy `ΔW V_r = 0` — i.e., the update lands entirely in null(V_r) and cannot
+overwrite the stored features.
+
+**ur_alpha=0** (V only): protects right singular directions only. Works per-matrix.
+Each new task re-snaps V_r from the current weights, so after many tasks V_r rotates
+away from T00's subspace and T00 features gradually drift — the "V_r rotation problem".
+
+**ur_alpha=1** (UV double projection): additionally enforces `U_r^T ΔW = 0`. Because
+both left and right singular directions are frozen to their T00 values, the mathematical
+guarantee is `U_r_0^T (W_0 + ΔW_1 + … + ΔW_t) V_r_0 = Σ_r_0` exactly for all t.
+T00's singular core is preserved indefinitely regardless of how many tasks follow.
+
+**fixed_subspaces**: Pass U_r/V_r computed once from T0 weights to every subsequent
+FPMuon instance. This prevents intra-task rotation — without it, even UV protection
+drifts because each task re-snaps slightly different U_r/V_r.
+
+**Ascending energy schedule**: `threshold(t) = 0.25 + (t-1)*0.075`. Early tasks
+protect a small subspace (low r, lots of free gradient) so later tasks can still
+learn. Later tasks protect more. This helps the chain learn all 10 tasks without
+starving any task of gradient freedom.
+
+#### SoftCompPreservingMuon (SCM)
+`frozen_residual_ubv/soft_comp_preserving_muon.py`
+
+**Idea**: For transformers, what matters for a learned task is not individual W_Q or
+W_K weights in isolation, but their **composition** M = W_Q^T W_K — the bilinear form
+that computes attention scores. FPMuon protects each matrix separately, which is a
+weaker guarantee: you could rotate W_Q and W_K in opposite directions and destroy M
+while leaving both V_r constraints satisfied.
+
+SCM directly constrains: `U_k^T (ΔW_Q^T W_K + W_Q^T ΔW_K) V_k ≈ 0`, where U_k, V_k
+are the top-k singular vectors of M. This is a Sylvester-type equation solved via
+damped least-squares. The constraint means new-task updates can only change M in
+directions orthogonal to its dominant subspace, preserving the attention pattern that
+encodes the old task.
+
+**GQA support**: In grouped query attention (multiple Q heads per KV head), the
+correction to the shared K head is accumulated as a mean over all Q heads in its
+group, then applied once.
+
+**Fallback hierarchy**: (1) ADMM dual ascent, (2) Sylvester correction, (3) zero the
+update if both fail and `hard_fallback_tol` is exceeded.
+
+#### CompositionPreservingMuon (CompMuon)
+`frozen_residual_ubv/composition_preserving_muon.py`
+
+Earlier implementation of the same composition-preservation idea as SCM. Uses a
+strict algebraic projection (strict_composition_fallback) rather than ADMM. Produces
+near-zero residuals (~1e-7) via direct projection onto the null space of the constraint.
+SCM replaced it as the primary optimizer but CompMuon tests document the fallback
+algebra and GQA accumulation logic that SCM inherited.
+
+#### ProjectedGradientOptimizer
+`frozen_residual_ubv/projected_gradient_optimizer.py`
+
+**Idea**: Factor W = UΓV^T (Stiefel × SPD × Stiefel). Update U and V on the Stiefel
+manifold via Manifold Muon + ADMM; update Γ on the SPD manifold via Riemannian
+gradient. The factorization constrains the optimizer to a smooth manifold, avoiding
+the unconstrained weight drift that causes catastrophic forgetting.
+
+This is the optimizer used in `--method dft` (DFT + Proj) for the Qwen3 experiments.
+
+---
+
+### Test Files
+
+#### `tests/test_feature_preserving_muon.py`
+Unit and integration tests for FPMuon.
+
+| Test | What it checks |
+|------|---------------|
+| `test_update_orthogonal_to_vr` | Single step: `‖ΔW @ V_r‖ < 1e-3` |
+| `test_constraint_holds_over_multiple_steps` | Leakage stays near zero over 5 steps |
+| `test_vr_frozen` | V_r does not change between steps (snapped once at init) |
+| `test_energy_threshold_determines_rank` | Higher threshold → higher r |
+| `test_1d_bias_fallback` | 1-D params (biases) handled without crash |
+| `test_momentum_orthogonality` | With momentum, the *update direction* (not the buffer) stays in null(V_r) |
+| `test_debug_flag` | Debug mode prints constraint residuals |
+| `test_conv_kernel` | 3-D conv weight flattened correctly; V_r lives in the right space |
+| `test_loss_decreases_mlp` | FPMuon actually reduces MSE on 2-layer MLP |
+| `test_loss_decreases_deep_linear` | Same check for 4-layer deep linear network |
+| `test_fp_muon_10task_chain_mlp` | **10-task MLP chain** (V only, ascending energy). Shows leakage≈0 per task but T00 drifts to 0.16 by task 9 due to V_r rotation. Diagonal (new task acc) stays high. |
+| `test_fp_muon_double_projection_mlp` | **UV vs V-only comparison** on same 10-task MLP. UV holds T00 substantially longer at midchain (after T05). Key assertion: `T00_mid_UV > T00_mid_V + 0.2`. |
+| `test_fp_muon_uv_lr_ablation` | **LR sweep** (1e-3, 5e-4, 3e-4, 1e-4, 3e-5) for UV double projection. Best: lr=3e-4 (avg T00 retention ≈ 0.80). |
+
+**Key empirical result from the MLP chain**: In MLP (no attention), the ReLU
+nonlinearity breaks the per-layer singular-vector guarantee across layers. fc2's V_r
+anchors to old hidden representations that fc1's null-space updates later invalidate.
+This means T00 is NOT specially retained in the MLP case — it drifts like any other
+task. FPMuon on MLP retains a sliding window of the most recent ~6 tasks, not a
+fixed anchor.
+
+#### `tests/test_soft_comp_continual.py`
+Integration tests for FPMuon and SCM on attention-based continual learning tasks.
+
+**Task construction**: token-pair matching. Each task uses a 2-dim signal subspace
+in a 64-dim input. Task t places the signal in dims `[t*k : (t+1)*k]`, so all 10
+tasks use orthogonal subspaces. Label is 1 iff both tokens have the same latent class
+(same-class pairs have positive QK dot product). The QK bilinear form `x_0^T (W_Q^T W_K) x_1`
+is the ideal classifier — protecting its dominant subspace is exactly what SCM does.
+
+| Test | What it checks |
+|------|---------------|
+| `test_soft_comp_muon_retains_task_a_after_task_b` | 2-task 1-layer: SCM retains Task A ≥ 0.80 after Task B; Adam forgets |
+| `test_feature_preserving_muon_retains_task_a_after_task_b` | Same but FPMuon; weaker guarantee ≥ 0.70 |
+| `test_feature_preserving_muon_10task_chain` | 1-layer, FPMuon 10-task chain; ≥ 4/10 tasks retained (Task 0 ≥ 0.80) |
+| `test_feature_preserving_muon_10task_chain_2layer` | 2-layer, FPMuon 10-task chain; harder (≥ 5/10) |
+| `test_soft_comp_muon_10task_chain` | 1-layer, SCM 10-task chain; ≥ 7/10 tasks retained — best result |
+| `test_feature_preserving_muon_10task_chain_2layer_last_only` | **Negative result**: FPMuon on last layer only of 2-layer model. Free AdamW on layer 0 overwrites intermediate representations, making last-layer V_r useless for old tasks. T00 ≈ 0.5 (chance). |
+| `test_soft_comp_muon_10task_chain_2layer_last_only` | Same negative result for SCM: protecting only the last layer fails when intermediate layers are free. |
+
+**Key insight from negative results**: Applying the constraint only to the last layer
+is insufficient when earlier layers are free to change. The constraint protects
+singular directions of the last layer's weights, but those directions become
+meaningless for old tasks once the upstream representation has been overwritten by
+a free optimizer. You must constrain all layers or accept forgetting through the
+unconstrained path.
+
+#### `tests/test_soft_comp_preserving_muon.py`
+Unit tests for the SCM optimizer internals (10 tests).
+
+| Test | What it checks |
+|------|---------------|
+| `test_dual_ascent_reduces_H_norm` | ADMM inner loop reduces `‖U_k^T (ΔW_Q^T W_K + W_Q^T ΔW_K) V_k‖` vs unconstrained |
+| `test_core_drift_small_after_step` | After one step, `‖core − Σ‖ / ‖Σ‖ < 10` (doesn't blow up) |
+| `test_k0_recovers_plain_muon` | Energy threshold=0 → k=0 → no constraint → same update as plain msign Muon |
+| `test_no_nans_with_degenerate_gradients` | Handles zero, 1e-15, and NaN gradients gracefully |
+| `test_gqa_k_update_is_averaged` | Shared KV head gets accumulated update from all Q heads in its group |
+| `test_factored_svd_matches_direct` | Low-rank SVD of A@B matches direct SVD(A@B) to 1e-4 |
+| `test_lambda_warmup_across_steps` | Lambda accumulation across 5 steps keeps H_norm finite (< 10.0) |
+| `test_sylvester_correction_reduces_h_norm` | Sylvester solve reduces H_norm by ≥ 10× |
+| `test_sylvester_fallback_zeroes_updates_on_failure` | When hard_fallback_tol=0, all updates are zeroed and weights unchanged |
+| `test_sylvester_always_applied_and_reduces_h_norm` | Sylvester reduces H_norm by ≥ 100× on a well-conditioned problem |
+
+#### `tests/test_composition_preserving_muon.py`
+15 tests for the older CompositionPreservingMuon (CompMuon). Covers the same
+ideas as SCM but with the strict algebraic fallback (strict_composition_fallback)
+that directly projects (ΔA, ΔB) onto the null space of the constraint using
+Gram-Schmidt style projection. Key correctness properties:
+
+- Head splitting shapes match energy-chosen rank k
+- Low-rank SVD of product A@B matches full SVD
+- QK strict fallback achieves residual < 1e-3
+- OV strict fallback achieves residual < 1e-3
+- Shared KV fallback updates accumulate from all Q heads
+- k=0 / preserve=False recovers plain msign Muon
+- Stored subspace tensors have `requires_grad=False`
+- `constraint_residual` returns ≈ 0 for a known feasible update
+- `skip_if_fallback_fails=True` zeroes the update when both methods fail
+- QK transpose mapping: `ΔW_Q_h = ΔA^T` (A = W_Q_h^T)
+- OV direct mapping: `ΔW_O_h = ΔA` (no transpose)
+
+#### `tests/test_projected_optimizer_regression.py`
+Tests ProjectedGradientOptimizer on a 2-layer linear classifier `f(x) = U @ W @ x`
+where W is updated with ProjectedGradient and U with Adam. Verifies that the
+projected optimizer achieves > 65% accuracy on a binary Gaussian classification
+task (class means differ in first 10 dims of 128). Also sweeps energy thresholds
+and compares against Adam baseline.
+
+#### `tests/test_two_layer_gradient.py`
+Sanity checks for ProjectedGradientOptimizer: gradient flow through the network,
+W actually changes after a step (ΔW > 0.01), single-layer baseline with direct
+parameter access.
+
+#### `tests/test_rectangular_init.py`
+Tests UBV initialization for common transformer weight shapes: square attention
+(4096×4096), tall MLP up/gate proj (11008×4096), wide MLP down proj (4096×11008),
+and smaller variants. Verifies the factorization is well-formed for each shape.
+
+#### `tests/test_rectangular_regression.py`
+Same regression task as `test_projected_optimizer_regression.py` but with a
+rectangular W ∈ R^{64×128} (d' ≠ d), exercising the tall/wide code paths that
+transformer MLP matrices use.
+
+#### `tests/test_admm_rectangular.py`
+Tests `manifold_muon_admm` (the ADMM inner loop for Manifold Muon) on tall
+(m > n) and wide (m < n) matrices. Checks that the returned direction is
+orthonormal and that the ADMM constraint is satisfied.

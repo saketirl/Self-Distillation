@@ -8,6 +8,12 @@ __pycache__/
 *.sql
 .idea
 data/*
+*.key
+*.pem
+*.env
+.env*
+*token*
+*secret*
 scripts/hf_token.out
 scripts/wandb_token.out
 eigenspectrum/CL_note.pdf
