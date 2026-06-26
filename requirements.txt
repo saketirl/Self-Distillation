@@ -15,3 +15,4 @@ flashinfer-python==0.5.3
 wandb==0.22.2
 pandas==2.3.3
 deepspeed==0.18.4
+muon @ git+https://github.com/KellerJordan/Muon

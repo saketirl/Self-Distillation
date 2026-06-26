@@ -1,0 +1,14 @@
+feature preserving:
+
+after tooluse
+
+tooluse: 0.20588235
+cot_math: 0.3373333333333333
+spider: 0.0
+
+after cot_math
+
+tooluse: 0.04411764705882353
+cot_math: 0.328
+
+

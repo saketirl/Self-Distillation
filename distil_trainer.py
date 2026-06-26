@@ -48,6 +48,20 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from trl.extras.profiling import profiling_context, profiling_decorator
+
+# Import FactoredLinear and UBVOptimizer for vLLM weight syncing and metric logging
+try:
+    from frozen_residual_ubv import FactoredLinear, UBVOptimizer, ProjectedGradientOptimizer
+    HAS_FACTORED_LINEAR = True
+    HAS_UBV_OPTIMIZER = True
+    HAS_PROJECTED_OPTIMIZER = True
+except ImportError:
+    HAS_FACTORED_LINEAR = False
+    HAS_UBV_OPTIMIZER = False
+    HAS_PROJECTED_OPTIMIZER = False
+    FactoredLinear = None
+    UBVOptimizer = None
+    ProjectedGradientOptimizer = None
 from trl.extras.vllm_client import VLLMClient
 from trl.import_utils import is_liger_kernel_available, is_vllm_available
 from trl.models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -832,6 +846,63 @@ class DistilTrainer(BaseTrainer):
             name = name.replace(prefix, "")
         return name
 
+    def _get_vllm_compatible_weights(self, model: nn.Module):
+        """
+        Yield (name, weight) pairs compatible with vLLM.
+
+        For FactoredLinear modules, computes the effective weight W = W_res + U @ B @ V^T
+        and yields it with the original weight name (e.g., 'layer.weight' instead of 'layer.U').
+
+        For standard modules, yields parameters as-is.
+        """
+        # Track which FactoredLinear modules we've already processed
+        processed_factored = set()
+
+        for name, module in model.named_modules():
+            if HAS_FACTORED_LINEAR and isinstance(module, FactoredLinear):
+                # Compute effective weight and yield with proper name
+                with torch.no_grad():
+                    effective_weight = module.get_effective_weight()
+                weight_name = f"{name}.weight" if name else "weight"
+                yield weight_name, effective_weight
+
+                # Also yield bias if present
+                if module.bias is not None:
+                    bias_name = f"{name}.bias" if name else "bias"
+                    yield bias_name, module.bias.data
+
+                # Mark this module's parameters as processed
+                processed_factored.add(f"{name}.U")
+                processed_factored.add(f"{name}.B")
+                processed_factored.add(f"{name}.V")
+                processed_factored.add(f"{name}.bias")
+
+        # Yield remaining parameters that aren't from FactoredLinear
+        for name, param in model.named_parameters():
+            # Skip if this is a FactoredLinear parameter we already handled
+            skip = False
+            for prefix in processed_factored:
+                if name == prefix or name.endswith(f".{prefix.split('.')[-1]}"):
+                    # Check if this param belongs to a processed FactoredLinear
+                    module_name = name.rsplit('.', 1)[0] if '.' in name else ''
+                    param_suffix = name.rsplit('.', 1)[-1]
+                    if f"{module_name}.{param_suffix}" in processed_factored or param_suffix in ['U', 'B', 'V']:
+                        # Double check by looking up the module
+                        try:
+                            parts = module_name.split('.')
+                            mod = model
+                            for p in parts:
+                                if p:
+                                    mod = getattr(mod, p)
+                            if HAS_FACTORED_LINEAR and isinstance(mod, FactoredLinear):
+                                skip = True
+                                break
+                        except AttributeError:
+                            pass
+
+            if not skip:
+                yield name, param.data
+
     def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         # For FSDP1, we need to recurse into children and also use summon_full_params
@@ -939,14 +1010,14 @@ class DistilTrainer(BaseTrainer):
                 elif fsdp_version == 2:
                     self._sync_fsdp2_params_to_vllm(model_to_sync)
             else:
-                for name, param in model_to_sync.named_parameters():
+                # Use vLLM-compatible weight iterator (handles FactoredLinear)
+                for name, weight in self._get_vllm_compatible_weights(model_to_sync):
                     name = self._fix_param_name_to_vllm(name)
-                    with gather_if_zero3([param]):
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param(name, param.data)
-                        elif self.vllm_mode == "colocate":
-                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(name, weight)
+                    elif self.vllm_mode == "colocate":
+                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        llm_model.load_weights([(name, weight)])
 
         # Reset cache on vLLM
         if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -1728,6 +1799,98 @@ class DistilTrainer(BaseTrainer):
             loss = loss.mean().detach()
         return loss, None, None
 
+    def _get_ubv_metrics(self) -> dict[str, float]:
+        """Get UBV/Projected optimizer metrics (eigenvalues of B matrices)."""
+        if not hasattr(self, 'optimizer') or self.optimizer is None:
+            return {}
+
+        optimizer = self.optimizer
+
+        # Handle accelerate-wrapped optimizers
+        if hasattr(optimizer, 'optimizer'):
+            optimizer = optimizer.optimizer
+
+        metrics = {}
+
+        # Check for ProjectedGradientOptimizer first (it has get_detailed_metrics)
+        if HAS_PROJECTED_OPTIMIZER and isinstance(optimizer, ProjectedGradientOptimizer):
+            try:
+                metrics = optimizer.get_detailed_metrics()
+                if metrics:
+                    return metrics
+            except Exception as e:
+                print(f"[DistilTrainer] Error getting ProjectedGradientOptimizer metrics: {e}")
+                pass
+
+        # Check for FeaturePreservingMuon (CombinedFPMuonAdamW exposes .fp_muon)
+        if hasattr(optimizer, 'fp_muon') and hasattr(optimizer.fp_muon, 'get_constraint_metrics'):
+            try:
+                fp_metrics = optimizer.fp_muon.get_constraint_metrics()
+                if fp_metrics:
+                    return fp_metrics
+            except Exception as e:
+                print(f"[DistilTrainer] Error getting FPMuon metrics: {e}", flush=True)
+
+        # Check for UBVOptimizer (might be wrapped in CombinedUBVAdamW)
+        ubv_opt = None
+        if hasattr(optimizer, 'ubv_optimizer'):
+            ubv_opt = optimizer.ubv_optimizer
+        elif HAS_UBV_OPTIMIZER and isinstance(optimizer, UBVOptimizer):
+            ubv_opt = optimizer
+
+        if ubv_opt is None or not hasattr(ubv_opt, 'get_spectrum_stats'):
+            return {}
+
+        try:
+            stats = ubv_opt.get_spectrum_stats()
+            eigenvalues_list = stats.get('eigenvalues', [])
+
+            if not eigenvalues_list:
+                return {}
+
+            # Compute aggregate statistics across all B matrices
+            all_min_eigs = []
+            all_max_eigs = []
+            all_mean_eigs = []
+            all_effective_ranks = []
+            all_condition_numbers = []
+
+            for eigs in eigenvalues_list:
+                if eigs.numel() == 0:
+                    continue
+                min_eig = eigs.min().item()
+                max_eig = eigs.max().item()
+                mean_eig = eigs.mean().item()
+
+                all_min_eigs.append(min_eig)
+                all_max_eigs.append(max_eig)
+                all_mean_eigs.append(mean_eig)
+
+                # Effective rank = sum(eigs) / max(eigs)
+                if max_eig > 0:
+                    eff_rank = eigs.sum().item() / max_eig
+                    all_effective_ranks.append(eff_rank)
+
+                # Condition number = max(eigs) / min(eigs)
+                if min_eig > 0:
+                    cond_num = max_eig / min_eig
+                    all_condition_numbers.append(cond_num)
+
+            if not all_min_eigs:
+                return {}
+
+            return {
+                'ubv/min_eigenvalue': min(all_min_eigs),
+                'ubv/max_eigenvalue': max(all_max_eigs),
+                'ubv/mean_eigenvalue': sum(all_mean_eigs) / len(all_mean_eigs),
+                'ubv/mean_effective_rank': sum(all_effective_ranks) / len(all_effective_ranks) if all_effective_ranks else 0,
+                'ubv/max_condition_number': max(all_condition_numbers) if all_condition_numbers else 0,
+                'ubv/num_B_matrices': len(eigenvalues_list),
+            }
+        except Exception:
+            # Don't break training if metric collection fails
+            return {}
+
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"
         metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
@@ -1736,6 +1899,20 @@ class DistilTrainer(BaseTrainer):
         # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
+
+        # Add UBV/Projected optimizer metrics (eigenvalues, effective rank, etc.)
+        ubv_metrics = self._get_ubv_metrics()
+        if ubv_metrics:
+            if mode == "eval":
+                ubv_metrics = {f"eval_{key}": val for key, val in ubv_metrics.items()}
+            metrics.update(ubv_metrics)
+            # Also log directly to wandb to ensure metrics are captured
+            try:
+                import wandb
+                if wandb.run is not None and mode == "train":
+                    wandb.log(ubv_metrics, commit=False)
+            except ImportError:
+                pass
 
         logs = {**logs, **metrics}
         super().log(logs, start_time)

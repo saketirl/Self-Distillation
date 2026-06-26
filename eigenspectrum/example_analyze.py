@@ -1,20 +1,23 @@
 """Example: Analyze eigenspectrum of individual weight matrices in Qwen.
 
-Uses real data from tooluse/gsm8k/mbpp test sets (500 samples by default).
+Uses real data from task eval sets (500 samples by default).
+Default tasks: tooluse, gsm8k, mbpp  (Qwen2.5-3B experiments)
+Qwen3-4B tasks: tooluse, spider, cot_math  — pass --data_tasks tooluse,spider,cot_math
 
 Usage:
     python -m eigenspectrum.example_analyze \
-        --model_path Qwen/Qwen2.5-3B-Instruct \
+        --model_path Qwen/Qwen3-4B \
         --layer 0 \
-        --param_pattern "q_proj.weight"
+        --data_tasks tooluse,spider,cot_math
 
-    # Custom number of samples
+    # Explicit sample count
     python -m eigenspectrum.example_analyze \
-        --model_path Qwen/Qwen2.5-3B-Instruct \
+        --model_path Qwen/Qwen3-4B \
         --layer 0 \
-        --num_data_samples 1000
+        --data_tasks tooluse,spider,cot_math \
+        --num_data_samples 500
 
-    # Use random tokens instead (legacy behavior)
+    # Use random tokens instead (legacy)
     python -m eigenspectrum.example_analyze \
         --model_path Qwen/Qwen2.5-3B-Instruct \
         --layer 0 \
@@ -53,63 +56,84 @@ class DummyDataset(Dataset):
         return {"input_ids": input_ids, "labels": input_ids}
 
 
-class CombinedTaskDataset(Dataset):
-    """Dataset combining tooluse, gsm8k, and mbpp test samples for Hessian computation."""
+_LOADER_MAP = None
 
-    def __init__(self, tokenizer, num_samples=500, max_seq_len=512, seed=42):
+def _get_loader_map():
+    global _LOADER_MAP
+    if _LOADER_MAP is None:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from data_loaders import (
+            load_tooluse_dataset,
+            load_gsm8k_dataset,
+            load_mbpp_dataset,
+            load_spider_dataset,
+            load_cot_math_dataset,
+        )
+        _LOADER_MAP = {
+            "tooluse":  load_tooluse_dataset,
+            "gsm8k":    load_gsm8k_dataset,
+            "mbpp":     load_mbpp_dataset,
+            "spider":   load_spider_dataset,
+            "cot_math": load_cot_math_dataset,
+        }
+    return _LOADER_MAP
+
+
+class CombinedTaskDataset(Dataset):
+    """Dataset combining eval samples from one or more tasks for Hessian computation.
+
+    Args:
+        tasks: List of task names to load (e.g. ["tooluse", "spider", "cot_math"]).
+               Defaults to ["tooluse", "gsm8k", "mbpp"] for backwards compatibility.
+    """
+
+    def __init__(self, tokenizer, num_samples=500, max_seq_len=512, seed=42,
+                 tasks=None):
+        if tasks is None:
+            tasks = ["tooluse", "gsm8k", "mbpp"]
+
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.samples = []
 
-        # Import data loaders from parent directory
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from data_loaders import load_tooluse_dataset, load_gsm8k_dataset, load_mbpp_dataset
+        loader_map = _get_loader_map()
+        for task in tasks:
+            if task not in loader_map:
+                raise ValueError(f"Unknown task '{task}'. Available: {list(loader_map)}")
 
-        # Load eval/test datasets
-        _, tooluse_eval = load_tooluse_dataset(seed=seed)
-        _, gsm8k_eval = load_gsm8k_dataset(seed=seed)
-        _, mbpp_eval = load_mbpp_dataset(seed=seed)  # This is the test split
+        # Load eval split for each task
+        per_task_eval = {}
+        for task in tasks:
+            _, eval_ds = loader_map[task](seed=seed)
+            per_task_eval[task] = eval_ds
 
-        # Determine samples per task
-        # tooluse has only 68 samples, so use all of them
-        tooluse_count = min(len(tooluse_eval), num_samples // 3)
-        remaining = num_samples - tooluse_count
-        gsm8k_count = remaining // 2
-        mbpp_count = remaining - gsm8k_count
+        # Distribute num_samples evenly across tasks, capped by available data
+        quota = num_samples // len(tasks)
+        counts = {t: min(quota, len(per_task_eval[t])) for t in tasks}
+        # Give leftover samples to the first task
+        leftover = num_samples - sum(counts.values())
+        first = tasks[0]
+        counts[first] = min(counts[first] + leftover, len(per_task_eval[first]))
 
-        # Adjust if datasets are smaller
-        tooluse_count = min(tooluse_count, len(tooluse_eval))
-        gsm8k_count = min(gsm8k_count, len(gsm8k_eval))
-        mbpp_count = min(mbpp_count, len(mbpp_eval))
+        summary = " + ".join(f"{counts[t]} {t}" for t in tasks)
+        print(f"Loading {summary} = {sum(counts.values())} total samples")
 
-        print(f"Loading {tooluse_count} tooluse + {gsm8k_count} gsm8k + {mbpp_count} mbpp = {tooluse_count + gsm8k_count + mbpp_count} total samples")
-
-        # Collect samples from each task
         all_examples = []
-        for i in range(tooluse_count):
-            all_examples.append(("tooluse", tooluse_eval[i]))
-        for i in range(gsm8k_count):
-            all_examples.append(("gsm8k", gsm8k_eval[i]))
-        for i in range(mbpp_count):
-            all_examples.append(("mbpp", mbpp_eval[i]))
+        for task in tasks:
+            for i in range(counts[task]):
+                all_examples.append((task, per_task_eval[task][i]))
 
-        # Shuffle
         import random
         random.seed(seed)
         random.shuffle(all_examples)
 
-        # Tokenize all samples
         for task_name, example in all_examples:
             prompt = example["prompt"]
             response = example["response"]
-
-            # Format as chat message
             messages = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
             messages = messages + [{"role": "assistant", "content": response}]
-
             text = tokenizer.apply_chat_template(messages, tokenize=False)
             tokens = tokenizer.encode(text, truncation=True, max_length=max_seq_len)
-
             if len(tokens) > 0:
                 self.samples.append(torch.tensor(tokens))
 
@@ -167,6 +191,8 @@ def main():
     # Data options (real data is default)
     parser.add_argument("--use_random_data", action="store_true",
                         help="Use random tokens instead of real task data")
+    parser.add_argument("--data_tasks", type=str, default="tooluse,gsm8k,mbpp",
+                        help="Comma-separated task names for real data (e.g. tooluse,spider,cot_math)")
     parser.add_argument("--num_data_samples", type=int, default=500,
                         help="Number of real data samples to use (default: 500)")
     parser.add_argument("--max_seq_len", type=int, default=512,
@@ -204,12 +230,14 @@ def main():
         dataset = DummyDataset(tokenizer, num_samples=args.batch_size * args.max_batches)
         dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn)
     else:
-        print(f"\nUsing real data from tooluse/gsm8k/mbpp test sets...")
+        task_list = [t.strip() for t in args.data_tasks.split(",") if t.strip()]
+        print(f"\nUsing real data from {task_list} test sets...")
         dataset = CombinedTaskDataset(
             tokenizer,
             num_samples=args.num_data_samples,
             max_seq_len=args.max_seq_len,
             seed=args.seed,
+            tasks=task_list,
         )
         dataloader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn)
         # Adjust max_batches to use all data

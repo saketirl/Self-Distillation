@@ -1,8 +1,15 @@
+output*
+*.log
+*.DS_Store
 .vscode/
 __pycache__/
 *.pyc
+*.npz
+*.sql
 .idea
 data/*
+scripts/hf_token.out
+scripts/wandb_token.out
 eigenspectrum/CL_note.pdf
 wandb/
 results/

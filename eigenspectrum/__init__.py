@@ -22,6 +22,12 @@ from .spectrum_analyzer import (
     SpectrumResult,
     quick_analyze,
 )
+from .stiefel_distance import (
+    spectral_distance_to_stiefel,
+    analyze_layer,
+    analyze_model,
+    compare_models,
+)
 
 __all__ = [
     # Lanczos
@@ -42,4 +48,9 @@ __all__ = [
     "SpectrumAnalyzer",
     "SpectrumResult",
     "quick_analyze",
+    # Stiefel distance
+    "spectral_distance_to_stiefel",
+    "analyze_layer",
+    "analyze_model",
+    "compare_models",
 ]
