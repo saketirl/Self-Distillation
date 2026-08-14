@@ -226,3 +226,110 @@ persisted across steps — soft enforcement that tightens over tens of steps
 (GramFlow discipline), measured `k_leak_ratio` $\approx 0.04$. Derivation and
 compute audit: session notes 2026-08-13; tests in
 `tests/test_coupled_key_halfsplit.py`.
+
+---
+
+## 7. Preserving the Gram of the composition: $M^\top M$ (proposed)
+
+Instead of only bounding $\Delta M$, additionally *preserve the Gram of the
+composed operator* — the composition-level analogue of Stiefel's
+$W^\top W = I$ and of the gram-manifold view
+(blog.tilderesearch.com/vignettes/gram-space), which treats the manifold
+$\{W : W^\top W = G\}$ for a single weight matrix. Here the manifold lives in
+**composed space**, as the quadratic preimage
+$\{(W_Q, W_K) : (W_Q W_K^\top)^\top (W_Q W_K^\top) = G_0\}$:
+
+$$
+\textbf{(P-Gram)}\qquad
+\min_{\Delta W_Q,\,\Delta W_K}\;
+\langle G_Q, \Delta W_Q\rangle + \langle G_K, \Delta W_K\rangle
+\quad\text{s.t.}\quad
+\lVert \Delta M \rVert_{\mathrm{op}} \le \varepsilon,
+\qquad
+\operatorname{sym}\!\big(M^\top \Delta M\big) = 0 ,
+$$
+
+using $D(M^\top M)[\Delta] = 2\operatorname{sym}(M^\top \Delta M)$ — the
+standard gram-manifold tangency with $W \to M$, pulled back through
+$\Delta M = \Delta W_Q W_K^\top + W_Q \Delta W_K^\top$. In factor space:
+
+$$
+\operatorname{sym}\Big(
+W_K \big(W_Q^\top \Delta W_Q\big) W_K^\top
+\;+\;
+W_K\, C_Q^2\, \Delta W_K^\top
+\Big) = 0,
+\qquad C_Q^2 = W_Q^\top W_Q .
+$$
+
+### 7.1 What it preserves
+
+$M^\top M = V \Sigma^2 V^\top$ is the right singular structure of the score
+map: **the key-side directions the head can attend over, and their gains**.
+Tangency freezes $V, \Sigma$ to first order and leaves the query-side frame
+$U$ free — retention of *what can be attended to*, plasticity in *what
+attends*. Note the identity
+
+$$
+M^\top M \;=\; W_K\, C_Q^{2}\, W_K^\top
+$$
+
+— the composed Gram **is** the key self-Gram measured in the query metric.
+
+### 7.2 Gauge invariance (the decisive property)
+
+Under the attention gauge $(W_Q, W_K) \to (W_Q R^{-\top},\, W_K R)$, $M$ — and
+hence $M^\top M$ — is invariant. The constraint therefore spends budget only
+on functional directions. This corrects the weakest point of §6: the raw key
+self-Gram $M_{kk} = W_K W_K^\top$ is *not* gauge-invariant in pure softmax
+attention (QK-norm only partially breaks the gauge), so §6's anchor can bind
+non-functional motion. **§6 is exactly the $C_Q = I$ approximation of
+(P-Gram)** — same machinery, unweighted metric.
+
+### 7.3 Rigidity of the exact constraint
+
+Splitting by the projector $P_K$ onto $\operatorname{col}(W_K)$: the
+$\perp$–$K$ cross-block of the equality forces
+$(I - P_K)\,\Delta W_K\, C_Q^2 = 0$, i.e. $\Delta W_K$'s columns must remain
+in $\operatorname{col}(W_K)$ — **no new key directions, ever** — plus a
+$d_h \times d_h$ core equality that couples $\Delta W_Q$ and $\Delta W_K$.
+Same over-rigidity as §6's full tangency, with one added consequence: the
+coupling breaks the per-leg separability that made the half-split closed-form.
+
+### 7.4 Practical (soft, subspace) form and solver
+
+Protect the top-$r$ right singular subspace $V_r$ of the **task-start** $M$,
+with contraction toward the anchored core
+$E_r = V_r^\top (M^\top M - (M^\top M)^{\text{anchor}}) V_r$:
+
+$$
+V_r^\top\, \operatorname{sym}(M^\top \Delta M)\, V_r \;=\; -\gamma\, E_r .
+$$
+
+Dualizing with one shared $\Lambda_r \in \mathrm{Sym}(r)$ per head tilts
+**both** legs (the pairing $\langle \Lambda, \operatorname{sym}(M^\top \Delta
+M)\rangle$ contributes to each factor's gradient):
+
+$$
+\tilde G_Q = G_Q + 2\, M\, \bar\Lambda\, W_K, \qquad
+\tilde G_K = G_K + 2\, \bar\Lambda\, M^\top W_Q,
+\qquad \bar\Lambda = V_r \Lambda_r V_r^\top ,
+$$
+
+all thin products (no $d\times d$ object: $MV_r$, $W_K^\top V_r$ etc. are
+$d\times r$ / $d_h\times r$). Each tilted leg is then solved by the §3
+whitened msign under its $\varepsilon/2$ ball, and $\Lambda_r$ ascends on the
+$r\times r$ residual of the **joint** realized $\Delta M$ — $K$ warm-started
+iterations, best-iterate selection, exactly the §6 discipline except the
+residual must be computed from both legs together (they are no longer
+independent given $\Lambda_r$).
+
+Cost over §6: one extra $d_h\times d_h$ Gram ($C_Q^2$) per head per step, and
+$V_r$ once per task from the thin SVD of the factor pair
+($M = (W_Q)(W_K)^\top$, QR of each thin factor, SVD of the $d_h\times d_h$
+core — never forming $M$).
+
+Status: formulated; not yet implemented. The delta from
+`CoupledKeyHalfSplitMuon` is (i) anchor $V_r$ of $M$ instead of eigenvectors
+of $W_KW_K^\top$, (ii) the $C_Q^2$ weighting, (iii) the joint two-leg residual
+in the dual loop.
