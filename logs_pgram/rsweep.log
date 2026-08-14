@@ -2,3 +2,7 @@ launched bracket_pg1e-2_aw1e-4_gl1e-4 on GPU 1 (pid 1072675)
 launched bracket_pg3e-3_aw3e-5_gl1e-4 on GPU 2 (pid 1072676)
 launched rsweep_r2 on GPU 3 (pid 1072677)
 launched rsweep_r4 on GPU 4 (pid 1072678)
+wave A done
+launched rsweep_r16 on GPU 1 (pid 1080577)
+launched rsweep_r32 on GPU 2 (pid 1080578)
+RSWEEP DONE
