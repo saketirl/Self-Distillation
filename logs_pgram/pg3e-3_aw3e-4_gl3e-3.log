@@ -1,0 +1,26 @@
+[combined-icl] task0 MSE=16.384; configs=pgram_gramflow
+
+=== pgram_gramflow ===
+  [pgram_gramflow] T01: MSE=5.796 finite=True max|W|=1.076e+00 (1.9m)  n_nonfinite=0.000e+00 qk_leak=1.480e-02 qk_E_fro=2.853e-02 ov_leak=5.650e-03 ov_E_fro=1.495e+00
+  [pgram_gramflow] T02: MSE=5.995 finite=True max|W|=1.078e+00 (3.8m)  n_nonfinite=0.000e+00 qk_leak=1.386e-02 qk_E_fro=3.406e-02 ov_leak=8.429e-03 ov_E_fro=2.126e+00
+  [pgram_gramflow] T03: MSE=5.877 finite=True max|W|=1.078e+00 (5.7m)  n_nonfinite=0.000e+00 qk_leak=1.306e-02 qk_E_fro=4.146e-02 ov_leak=8.147e-03 ov_E_fro=2.470e+00
+  [pgram_gramflow] T04: MSE=5.755 finite=True max|W|=1.078e+00 (7.6m)  n_nonfinite=0.000e+00 qk_leak=1.444e-02 qk_E_fro=4.899e-02 ov_leak=8.520e-03 ov_E_fro=2.630e+00
+  [pgram_gramflow] T05: MSE=5.884 finite=True max|W|=1.081e+00 (9.6m)  n_nonfinite=0.000e+00 qk_leak=1.622e-02 qk_E_fro=5.793e-02 ov_leak=6.941e-03 ov_E_fro=2.629e+00
+  [pgram_gramflow] T06: MSE=5.777 finite=True max|W|=1.081e+00 (11.6m)  n_nonfinite=0.000e+00 qk_leak=1.267e-02 qk_E_fro=6.709e-02 ov_leak=8.007e-03 ov_E_fro=2.573e+00
+  [pgram_gramflow] T07: MSE=5.887 finite=True max|W|=1.080e+00 (13.5m)  n_nonfinite=0.000e+00 qk_leak=1.322e-02 qk_E_fro=7.832e-02 ov_leak=7.284e-03 ov_E_fro=2.319e+00
+  [pgram_gramflow] T08: MSE=5.982 finite=True max|W|=1.080e+00 (15.4m)  n_nonfinite=0.000e+00 qk_leak=1.448e-02 qk_E_fro=8.733e-02 ov_leak=9.613e-03 ov_E_fro=2.214e+00
+  [pgram_gramflow] T09: MSE=5.837 finite=True max|W|=1.080e+00 (17.4m)  n_nonfinite=0.000e+00 qk_leak=1.316e-02 qk_E_fro=9.423e-02 ov_leak=8.637e-03 ov_E_fro=2.380e+00
+  [pgram_gramflow] T10: MSE=5.918 finite=True max|W|=1.080e+00 (19.4m)  n_nonfinite=0.000e+00 qk_leak=1.284e-02 qk_E_fro=1.031e-01 ov_leak=8.320e-03 ov_E_fro=2.296e+00
+  [pgram_gramflow] T11: MSE=5.937 finite=True max|W|=1.080e+00 (21.4m)  n_nonfinite=0.000e+00 qk_leak=1.589e-02 qk_E_fro=1.106e-01 ov_leak=7.512e-03 ov_E_fro=2.238e+00
+  [pgram_gramflow] T12: MSE=5.779 finite=True max|W|=1.080e+00 (23.3m)  n_nonfinite=0.000e+00 qk_leak=1.391e-02 qk_E_fro=1.203e-01 ov_leak=1.052e-02 ov_E_fro=2.130e+00
+  [pgram_gramflow] T13: MSE=5.880 finite=True max|W|=1.081e+00 (25.3m)  n_nonfinite=0.000e+00 qk_leak=1.360e-02 qk_E_fro=1.265e-01 ov_leak=8.816e-03 ov_E_fro=2.144e+00
+  [pgram_gramflow] T14: MSE=5.833 finite=True max|W|=1.079e+00 (27.3m)  n_nonfinite=0.000e+00 qk_leak=1.353e-02 qk_E_fro=1.345e-01 ov_leak=8.698e-03 ov_E_fro=2.200e+00
+  [pgram_gramflow] T15: MSE=5.620 finite=True max|W|=1.078e+00 (29.3m)  n_nonfinite=0.000e+00 qk_leak=1.372e-02 qk_E_fro=1.436e-01 ov_leak=9.368e-03 ov_E_fro=2.254e+00
+  [pgram_gramflow] T16: MSE=5.556 finite=True max|W|=1.074e+00 (31.2m)  n_nonfinite=0.000e+00 qk_leak=1.274e-02 qk_E_fro=1.540e-01 ov_leak=1.063e-02 ov_E_fro=2.391e+00
+  [pgram_gramflow] T17: MSE=5.751 finite=True max|W|=1.069e+00 (33.2m)  n_nonfinite=0.000e+00 qk_leak=1.350e-02 qk_E_fro=1.658e-01 ov_leak=9.576e-03 ov_E_fro=2.366e+00
+  [pgram_gramflow] T18: MSE=5.432 finite=True max|W|=1.068e+00 (35.2m)  n_nonfinite=0.000e+00 qk_leak=1.435e-02 qk_E_fro=1.722e-01 ov_leak=1.031e-02 ov_E_fro=2.468e+00
+  [pgram_gramflow] T19: MSE=5.659 finite=True max|W|=1.067e+00 (37.1m)  n_nonfinite=0.000e+00 qk_leak=1.248e-02 qk_E_fro=1.820e-01 ov_leak=1.089e-02 ov_E_fro=2.506e+00
+  [pgram_gramflow] done=20/20  diag_med=5.84  task0_end=22.07  past_end=16.66  past_chain=17.15
+
+[saved] eigenspectrum/outputs/pgram_sweep/pg3e-3_aw3e-4_gl3e-3.npz
+[W814 20:46:13.462380040 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())

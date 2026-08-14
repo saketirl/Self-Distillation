@@ -1,0 +1,41 @@
+=== measuring pgram_gramflow ===
+[pgram_gramflow] T01 relM=0.061 gramM=0.077 gramM_top8=0.013 | relN=0.034 gramN=0.020 gramN_topr=0.009 | task0_mse=17.76
+[pgram_gramflow] T02 relM=0.087 gramM=0.108 gramM_top8=0.017 | relN=0.053 gramN=0.031 gramN_topr=0.013 | task0_mse=20.24
+[pgram_gramflow] T03 relM=0.104 gramM=0.129 gramM_top8=0.021 | relN=0.065 gramN=0.038 gramN_topr=0.016 | task0_mse=22.97
+[pgram_gramflow] T04 relM=0.117 gramM=0.145 gramM_top8=0.022 | relN=0.073 gramN=0.045 gramN_topr=0.018 | task0_mse=26.09
+[pgram_gramflow] T05 relM=0.129 gramM=0.160 gramM_top8=0.023 | relN=0.081 gramN=0.050 gramN_topr=0.020 | task0_mse=28.55
+[pgram_gramflow] T06 relM=0.138 gramM=0.172 gramM_top8=0.025 | relN=0.088 gramN=0.056 gramN_topr=0.022 | task0_mse=29.82
+[pgram_gramflow] T07 relM=0.147 gramM=0.188 gramM_top8=0.029 | relN=0.094 gramN=0.063 gramN_topr=0.021 | task0_mse=30.56
+[pgram_gramflow] T08 relM=0.158 gramM=0.205 gramM_top8=0.034 | relN=0.101 gramN=0.070 gramN_topr=0.023 | task0_mse=32.21
+[pgram_gramflow] T09 relM=0.166 gramM=0.217 gramM_top8=0.038 | relN=0.107 gramN=0.075 gramN_topr=0.027 | task0_mse=33.53
+[pgram_gramflow] T10 relM=0.175 gramM=0.231 gramM_top8=0.042 | relN=0.113 gramN=0.079 gramN_topr=0.037 | task0_mse=35.60
+[pgram_gramflow] T11 relM=0.182 gramM=0.242 gramM_top8=0.045 | relN=0.118 gramN=0.084 gramN_topr=0.042 | task0_mse=38.83
+[pgram_gramflow] T12 relM=0.192 gramM=0.259 gramM_top8=0.050 | relN=0.124 gramN=0.089 gramN_topr=0.047 | task0_mse=40.71
+[pgram_gramflow] T13 relM=0.200 gramM=0.272 gramM_top8=0.051 | relN=0.130 gramN=0.098 gramN_topr=0.058 | task0_mse=38.66
+[pgram_gramflow] T14 relM=0.209 gramM=0.285 gramM_top8=0.054 | relN=0.136 gramN=0.101 gramN_topr=0.061 | task0_mse=39.24
+[pgram_gramflow] T15 relM=0.217 gramM=0.295 gramM_top8=0.056 | relN=0.139 gramN=0.102 gramN_topr=0.060 | task0_mse=41.96
+[pgram_gramflow] T16 relM=0.225 gramM=0.310 gramM_top8=0.060 | relN=0.143 gramN=0.103 gramN_topr=0.059 | task0_mse=42.24
+[pgram_gramflow] T17 relM=0.235 gramM=0.323 gramM_top8=0.065 | relN=0.149 gramN=0.106 gramN_topr=0.061 | task0_mse=40.23
+[pgram_gramflow] T18 relM=0.244 gramM=0.338 gramM_top8=0.079 | relN=0.154 gramN=0.107 gramN_topr=0.060 | task0_mse=40.47
+[pgram_gramflow] T19 relM=0.255 gramM=0.360 gramM_top8=0.112 | relN=0.157 gramN=0.110 gramN_topr=0.064 | task0_mse=38.20
+=== measuring adam ===
+[adam] T01 relM=0.504 gramM=0.706 gramM_top8=0.252 | relN=0.588 gramN=0.690 gramN_topr=0.669 | task0_mse=37.36
+[adam] T02 relM=0.627 gramM=0.983 gramM_top8=0.341 | relN=0.605 gramN=0.665 gramN_topr=0.640 | task0_mse=37.69
+[adam] T03 relM=0.741 gramM=1.314 gramM_top8=0.461 | relN=0.651 gramN=0.649 gramN_topr=0.594 | task0_mse=37.41
+[adam] T04 relM=0.866 gramM=1.719 gramM_top8=0.579 | relN=0.666 gramN=0.667 gramN_topr=0.541 | task0_mse=36.43
+[adam] T05 relM=0.993 gramM=2.187 gramM_top8=0.717 | relN=0.685 gramN=0.674 gramN_topr=0.520 | task0_mse=34.49
+[adam] T06 relM=1.107 gramM=2.646 gramM_top8=0.935 | relN=0.724 gramN=0.729 gramN_topr=0.440 | task0_mse=33.41
+[adam] T07 relM=1.280 gramM=3.394 gramM_top8=1.131 | relN=0.795 gramN=0.841 gramN_topr=0.462 | task0_mse=31.95
+[adam] T08 relM=1.482 gramM=4.537 gramM_top8=1.533 | relN=0.888 gramN=0.993 gramN_topr=0.443 | task0_mse=33.58
+[adam] T09 relM=1.669 gramM=5.606 gramM_top8=1.999 | relN=1.037 gramN=1.416 gramN_topr=0.612 | task0_mse=32.76
+[adam] T10 relM=1.948 gramM=7.583 gramM_top8=2.677 | relN=1.217 gramN=1.911 gramN_topr=0.847 | task0_mse=31.38
+[adam] T11 relM=2.209 gramM=9.519 gramM_top8=3.323 | relN=1.412 gramN=2.598 gramN_topr=1.239 | task0_mse=31.78
+[adam] T12 relM=2.520 gramM=12.055 gramM_top8=4.078 | relN=1.647 gramN=3.373 gramN_topr=1.647 | task0_mse=33.26
+[adam] T13 relM=2.889 gramM=15.769 gramM_top8=5.231 | relN=1.838 gramN=4.095 gramN_topr=1.963 | task0_mse=31.71
+[adam] T14 relM=3.197 gramM=18.862 gramM_top8=6.310 | relN=2.085 gramN=5.071 gramN_topr=2.437 | task0_mse=32.41
+[adam] T15 relM=3.578 gramM=23.230 gramM_top8=7.881 | relN=2.360 gramN=6.291 gramN_topr=3.032 | task0_mse=31.58
+[adam] T16 relM=4.103 gramM=30.185 gramM_top8=10.285 | relN=2.551 gramN=7.453 gramN_topr=3.461 | task0_mse=30.33
+[adam] T17 relM=4.559 gramM=36.803 gramM_top8=12.434 | relN=2.780 gramN=8.270 gramN_topr=3.658 | task0_mse=33.35
+[adam] T18 relM=5.197 gramM=47.035 gramM_top8=16.170 | relN=3.015 gramN=9.794 gramN_topr=4.172 | task0_mse=31.18
+[adam] T19 relM=5.636 gramM=54.350 gramM_top8=18.772 | relN=3.266 gramN=10.825 gramN_topr=4.474 | task0_mse=30.74
+[saved] /data/saket/continual/Self-Distillation/.claude/worktrees/coupled-key-halfsplit/eigenspectrum/outputs/pgram_sweep/composition_drift.json
