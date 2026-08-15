@@ -167,7 +167,11 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
             delta = dn * (delta.norm() / dn.norm().clamp_min(1e-12))
             if recert is not None:
                 ratio = float(recert(delta))
+                prev = self._viol.get("pgram/recert_max", 0.0)
+                self._viol["pgram/recert_max"] = max(prev, ratio)
                 if ratio > 1.0:
+                    self._viol["pgram/recert_clips"] = \
+                        self._viol.get("pgram/recert_clips", 0.0) + 1.0
                     delta = delta / ratio
         self._apply(p, delta, lr)
 
@@ -251,6 +255,11 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                 if self.track_every and self._nstep % self.track_every == 0:
                     self._viol["pgram/qk_leak"] = best[0]
                     self._viol["pgram/qk_E_fro"] = float(E.norm(dim=(-2, -1)).mean())
+                    # drift RELATIVE to the anchored core + applied correction
+                    _sn = S.norm(dim=(-2, -1)).clamp_min(1e-12)
+                    self._viol["pgram/qk_E_rel"] = float(
+                        (E.norm(dim=(-2, -1)) / _sn).mean())
+                    self._viol["pgram/qk_geff"] = float(g_eff.mean())
             else:
                 dQ = -half * (ms(
                     GQ.flatten(0, 1) @ CKi.repeat_interleave(grp, 0), self.ns_steps
@@ -294,6 +303,10 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                 if self.track_every and self._nstep % self.track_every == 0:
                     self._viol["pgram/ov_leak"] = best[0]
                     self._viol["pgram/ov_E_fro"] = float(E.norm(dim=(-2, -1)).mean())
+                    _sn = S.norm(dim=(-2, -1)).clamp_min(1e-12)
+                    self._viol["pgram/ov_E_rel"] = float(
+                        (E.norm(dim=(-2, -1)) / _sn).mean())
+                    self._viol["pgram/ov_geff"] = float(g_eff.mean())
             else:
                 dO = -half * (ms(
                     GO.flatten(0, 1) @ CVi.repeat_interleave(grp, 0), self.ns_steps
