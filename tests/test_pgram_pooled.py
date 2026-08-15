@@ -141,3 +141,32 @@ def test_lr0_noop():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_gramns_matches_pe_msign():
+    from frozen_residual_ubv.pgram_pooled_muon import msign_gram_batched
+    from frozen_residual_ubv.compositional_halfsplit_muon import msign_batched
+    g = torch.Generator().manual_seed(4)
+    X = torch.randn(3, 96, 24, generator=g)          # tall, aspect 4
+    A = msign_batched(X.clone(), 8)
+    B = msign_gram_batched(X.clone(), 8)
+    # both approximate polar(X): orthonormal columns + alignment
+    I = torch.eye(24).expand(3, 24, 24)
+    assert float((B.mT @ B - I).norm(dim=(-2, -1)).max()) < 5e-2
+    assert float((A - B).norm()) / float(A.norm()) < 5e-2
+
+
+def test_dion3_features_smoke():
+    named = make_params()
+    opt = make_opt(named, momentum_mu=0.9, normuon_beta2=0.95, gramns=True)
+    before = [p.detach().clone() for _, p in named]
+    for i in range(4):
+        set_grads(named, seed=30 + i)
+        opt.step()
+    moved = sum(float((p.detach() - b).abs().sum()) for (_, p), b in zip(named, before))
+    assert moved > 1e-6
+    for _, p in named:
+        assert torch.isfinite(p.detach()).all()
+    # momentum buffers exist and are finite
+    n_bufs = sum(1 for st in opt.state.values() if "Mbuf" in st)
+    assert n_bufs == 4

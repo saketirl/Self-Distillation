@@ -46,6 +46,35 @@ from .compositional_halfsplit_muon import (
 from .pgram_halfsplit_muon import _top_r_of_gram
 
 
+
+
+def msign_gram_batched(X, steps: int = 8, eps: float = 1e-7):
+    """Polar via Gram Newton-Schulz (Dion3, Thm 2): iterate on the SMALL n x n
+    Gram instead of the n x m matrix. All iterates are polynomials of A = x x^T
+    and commute, so with PE coefficients (a,b,c):
+        z_t = a I + b R_t + c R_t^2 ;  R_{t+1} = R_t z_t^2 ;  Q_{t+1} = z_t Q_t
+    and msign(X) ~= Q_T x. FLOPs per iter ~5 n^3 vs PE's ~3 n^2 m (m >> n).
+    fp32 throughout (no fp16 restart needed at our precisions).
+    """
+    from .compositional_halfsplit_muon import _PE
+    tp = X.shape[-2] > X.shape[-1]
+    x = X.mT if tp else X                                  # (..., n, m), n <= m
+    x = x / x.norm(dim=(-2, -1), keepdim=True).clamp_min(eps)
+    n = x.shape[-2]
+    eye = torch.eye(n, device=x.device, dtype=x.dtype).expand(*x.shape[:-2], n, n)
+    R = x @ x.mT
+    Q = eye.clone()
+    for i in range(steps):
+        a, b, c = _PE[i] if i < len(_PE) else (1.5, -0.5, 0.0)
+        R2 = R @ R
+        z = a * eye + b * R + c * R2
+        Rz = R @ z
+        R = Rz @ z
+        Q = z @ Q
+    out = Q @ x
+    return out.mT if tp else out
+
+
 def _chol_damped(G: Tensor) -> Tensor:
     G = 0.5 * (G + G.mT)
     eye = torch.eye(G.shape[-1], device=G.device, dtype=G.dtype)
@@ -63,7 +92,9 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                  attn_name_patterns: Optional[List[str]] = None,
                  rank: int = 8, gamma: float = 1e-3,
                  dual_steps: int = 2, dual_lr: float = 2.0,   # pooled dual is smooth — no chattering (see tests/debug_pooled_dual.py)
-                 clamp_c: float = 0.5):
+                 clamp_c: float = 0.5,
+                 momentum_mu: float = 0.0, normuon_beta2: float = 0.0,
+                 gramns: bool = False):
         super().__init__(named_params, lr=lr, eps=eps, head_dim=head_dim,
                          num_kv_heads=num_kv_heads, damping=damping,
                          preserve_qk=False, preserve_ov=False, ns_steps=ns_steps,
@@ -73,6 +104,8 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
             raise ValueError(f"rank must be in [0, head_dim={head_dim}]")
         self.rank, self.gamma = rank, gamma
         self.dual_steps, self.dual_lr, self.clamp_c = dual_steps, dual_lr, clamp_c
+        self.momentum_mu, self.normuon_beta2 = momentum_mu, normuon_beta2
+        self.gramns = gramns
         self._anchor: Dict[str, Dict[str, Tensor]] = {}
         if rank > 0:
             self.snap_anchor()
@@ -111,6 +144,45 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                       "ov_Lam": torch.zeros_like(a["qk_Lam"])})
             self._anchor[lid] = a
 
+
+    # ---------------------------------------------------- dion3-style helpers
+    def _apply_leg(self, p, delta, lr):
+        """NorMuon per-neuron second-moment normalization at nn.Linear row level
+        (rows = output neurons uniformly), Frobenius-rescaled, then apply."""
+        b2 = self.normuon_beta2
+        if b2 > 0:
+            st = self.state.setdefault(p, {})
+            row = delta.float().pow(2).mean(dim=1, keepdim=True)
+            v = st.get("normuon_v")
+            if v is None:
+                v = row.clone()
+            else:
+                v.mul_(b2).add_(row, alpha=1.0 - b2)
+            st["normuon_v"] = v
+            dn = delta / (v.sqrt() + 1e-8)
+            delta = dn * (delta.norm() / dn.norm().clamp_min(1e-12))
+        self._apply(p, delta, lr)
+
+    def _grad_or_momentum(self, p):
+        """Dion3 f=1 buffer: M <- M + G, use M, decay M <- mu M after step."""
+        g = p.grad.float()
+        if self.momentum_mu <= 0:
+            return g
+        st = self.state.setdefault(p, {})
+        M = st.get("Mbuf")
+        if M is None:
+            M = torch.zeros_like(g)
+        M = M + g
+        st["Mbuf"] = M
+        return M
+
+    def _decay_momentum(self, *params):
+        if self.momentum_mu > 0:
+            for p in params:
+                st = self.state.get(p)
+                if st is not None and "Mbuf" in st:
+                    st["Mbuf"] = st["Mbuf"] * self.momentum_mu
+
     # ------------------------------------------------------------------- step
     @torch.no_grad()
     def step(self, closure=None):
@@ -120,6 +192,7 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
             return loss
         half = 0.5 * self.eps
         r, K = self.rank, max(1, self.dual_steps)
+        ms = msign_gram_batched if self.gramns else msign_batched
 
         for lid, lp in self._layers.items():
             if not {"q", "k", "v", "o"} <= lp.keys() or lp["q"].grad is None:
@@ -127,10 +200,10 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
             (p_Q, p_K, p_V, p_O, WQ, WK, WO, WV,
              H_q, H_kv, grp, d) = self._kv_views(lp)
             d_h = self.head_dim
-            GQ = p_Q.grad.view(H_kv, grp, d_h, d).mT.float()
-            GK = p_K.grad.view(H_kv, d_h, d).mT.float()
-            GO = p_O.grad.view(d, H_kv, grp, d_h).permute(1, 2, 0, 3).float()
-            GV = p_V.grad.view(H_kv, d_h, d).float()
+            GQ = self._grad_or_momentum(p_Q).view(H_kv, grp, d_h, d).mT
+            GK = self._grad_or_momentum(p_K).view(H_kv, d_h, d).mT
+            GO = self._grad_or_momentum(p_O).view(d, H_kv, grp, d_h).permute(1, 2, 0, 3)
+            GV = self._grad_or_momentum(p_V).view(H_kv, d_h, d)
             an = self._anchor.get(lid, {}) if r > 0 else {}
 
             # ================= QK circuit =================
@@ -152,11 +225,11 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                 for _ in range(K):
                     tQ = 2.0 * (WQ @ (A.mT @ (Lam @ A)).unsqueeze(1))
                     tK = 2.0 * (Vr @ (Lam @ ACG))
-                    dQ_i = -half * (msign_batched(
+                    dQ_i = -half * (ms(
                         (GQ + tQ).flatten(0, 1) @ CKi.repeat_interleave(grp, 0),
                         self.ns_steps) @ CKi.repeat_interleave(grp, 0)
                     ).view(H_kv, grp, d, d_h)
-                    dK_i = -half * (msign_batched((GK + tK) @ CGi, self.ns_steps) @ CGi)
+                    dK_i = -half * (ms((GK + tK) @ CGi, self.ns_steps) @ CGi)
                     P = ((A.unsqueeze(1) @ (WQ.mT @ dQ_i) @ A.unsqueeze(1).mT).sum(1)
                          + ACG @ (Vr.mT @ dK_i).mT)
                     resid = (P + P.mT) + g_eff * E
@@ -171,10 +244,10 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                     self._viol["pgram/qk_leak"] = best[0]
                     self._viol["pgram/qk_E_fro"] = float(E.norm(dim=(-2, -1)).mean())
             else:
-                dQ = -half * (msign_batched(
+                dQ = -half * (ms(
                     GQ.flatten(0, 1) @ CKi.repeat_interleave(grp, 0), self.ns_steps
                 ) @ CKi.repeat_interleave(grp, 0)).view(H_kv, grp, d, d_h)
-                dK = -half * (msign_batched(GK @ CGi, self.ns_steps) @ CGi)
+                dK = -half * (ms(GK @ CGi, self.ns_steps) @ CGi)
 
             # ================= OV circuit =================
             CO2 = (WO.mT @ WO).sum(1)                          # pooled O metric
@@ -195,11 +268,11 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                 for _ in range(K):
                     tO = 2.0 * (WO @ (Aov @ (Lam @ Aov.mT)).unsqueeze(1))
                     tV = 2.0 * (CA @ (Lam @ Vr.mT))
-                    dO_i = -half * (msign_batched(
+                    dO_i = -half * (ms(
                         (GO + tO).flatten(0, 1) @ CVi.repeat_interleave(grp, 0),
                         self.ns_steps) @ CVi.repeat_interleave(grp, 0)
                     ).view(H_kv, grp, d, d_h)
-                    dV_i = -half * (COg @ msign_batched(COg @ (GV + tV), self.ns_steps))
+                    dV_i = -half * (COg @ ms(COg @ (GV + tV), self.ns_steps))
                     P = ((Aov.unsqueeze(1).mT @ (WO.mT @ dO_i) @ Aov.unsqueeze(1)).sum(1)
                          + Aov.mT @ CO2 @ (dV_i @ Vr))
                     resid = (P + P.mT) + g_eff * E
@@ -214,17 +287,18 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
                     self._viol["pgram/ov_leak"] = best[0]
                     self._viol["pgram/ov_E_fro"] = float(E.norm(dim=(-2, -1)).mean())
             else:
-                dO = -half * (msign_batched(
+                dO = -half * (ms(
                     GO.flatten(0, 1) @ CVi.repeat_interleave(grp, 0), self.ns_steps
                 ) @ CVi.repeat_interleave(grp, 0)).view(H_kv, grp, d, d_h)
-                dV = -half * (COg @ msign_batched(COg @ GV, self.ns_steps))
+                dV = -half * (COg @ ms(COg @ GV, self.ns_steps))
 
             ok = all(torch.isfinite(x).all() for x in (dQ, dK, dO, dV))
             if ok:
-                self._apply(p_Q, dQ.mT.reshape(H_q * d_h, d), lr)
-                self._apply(p_K, dK.mT.reshape(H_kv * d_h, d), lr)
-                self._apply(p_O, dO.permute(2, 0, 1, 3).reshape(d, H_q * d_h), lr)
-                self._apply(p_V, dV.reshape(H_kv * d_h, d), lr)
+                self._apply_leg(p_Q, dQ.mT.reshape(H_q * d_h, d), lr)
+                self._apply_leg(p_K, dK.mT.reshape(H_kv * d_h, d), lr)
+                self._apply_leg(p_O, dO.permute(2, 0, 1, 3).reshape(d, H_q * d_h), lr)
+                self._apply_leg(p_V, dV.reshape(H_kv * d_h, d), lr)
+                self._decay_momentum(p_Q, p_K, p_O, p_V)
             else:
                 self.n_bad += 1
         self._nstep += 1

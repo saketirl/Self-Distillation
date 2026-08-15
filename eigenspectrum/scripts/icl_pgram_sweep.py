@@ -31,6 +31,7 @@ from frozen_residual_ubv.compositional_halfsplit_muon import CompositionalHalfSp
 from frozen_residual_ubv.soft_comp_preserving_muon import SoftCompPreservingMuon
 from icl_gqa_model import ICLGQATransformer
 from frozen_residual_ubv.pgram_halfsplit_muon import PGramHalfSplitMuon
+from frozen_residual_ubv.pgram_pooled_muon import PGramPooledMuon
 
 D, D_MODEL, N_HEADS, N_LAYERS, D_FF, N_CTX, BATCH = 20, 128, 4, 2, 256, 32, 64
 HEAD_DIM = D_MODEL // N_HEADS
@@ -213,6 +214,26 @@ def make_opts(m, kind, args):
         mt = _mlp_tall(m)
         return [pg, GramFlowMuon(mt, lr=args.gram_lr, stiefel_rate=args.gamma),
                 torch.optim.AdamW(_rest(m, ap + mt), lr=args.adamw_lr)]
+    if kind in ("pgram_pooled", "pgramd3", "pgramd3_gramflow", "pgram_pooled_gramflow"):
+        # pooled-anchor production class; pgramd3 adds the Dion3-inspired
+        # features (momentum/EF buffer, NorMuon per-neuron v, Gram-NS msign).
+        an = _attn_named(m); ap = [p for _, p in an]
+        d3 = kind.startswith("pgramd3")
+        pg = PGramPooledMuon(
+            an, lr=args.pgram_lr, eps=args.pgram_eps, head_dim=HEAD_DIM,
+            num_kv_heads=N_KV_HEADS, damping=args.pgram_damping,
+            rank=args.pgram_rank, gamma=args.pgram_gamma,
+            dual_steps=args.pgram_dual_steps, dual_lr=args.pooled_dual_lr,
+            momentum_mu=(args.d3_momentum if d3 else 0.0),
+            normuon_beta2=(args.d3_normuon if d3 else 0.0),
+            gramns=(args.d3_gramns if d3 else False),
+            track_every=10,
+            attn_name_patterns=[r"(?:.*\.)?layers\.(\d+)\.self_attn\.(q|k|v|o)_proj\.weight"])
+        if kind in ("pgram_pooled", "pgramd3"):
+            return [pg, torch.optim.AdamW(_rest(m, ap), lr=args.adamw_lr)]
+        mt = _mlp_tall(m)
+        return [pg, GramFlowMuon(mt, lr=args.gram_lr, stiefel_rate=args.gamma),
+                torch.optim.AdamW(_rest(m, ap + mt), lr=args.adamw_lr)]
     raise ValueError(kind)
 
 
@@ -313,6 +334,10 @@ def main():
     ap.add_argument("--pgram_gamma", type=float, default=1e-3)
     ap.add_argument("--pgram_dual_steps", type=int, default=2)
     ap.add_argument("--pgram_dual_lr", type=float, default=0.25)
+    ap.add_argument("--pooled_dual_lr", type=float, default=2.0)
+    ap.add_argument("--d3_momentum", type=float, default=0.9)
+    ap.add_argument("--d3_normuon", type=float, default=0.95)
+    ap.add_argument("--d3_gramns", type=int, default=1)
     ap.add_argument("--configs", default="adam,gramflow,scm,combined")
     ap.add_argument("--out", default=str(ROOT / "eigenspectrum" / "outputs" / "icl_combined.npz"))
     args = ap.parse_args()
