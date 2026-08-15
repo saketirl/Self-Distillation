@@ -333,3 +333,82 @@ Status: formulated; not yet implemented. The delta from
 `CoupledKeyHalfSplitMuon` is (i) anchor $V_r$ of $M$ instead of eigenvectors
 of $W_KW_K^\top$, (ii) the $C_Q^2$ weighting, (iii) the joint two-leg residual
 in the dual loop.
+
+---
+
+## 8. Deriving the Dion3-inspired modifications (not adopting them as recipes)
+
+Each modification must fall out of the same variational template as §§1–7:
+*choose the estimator of the linear functional, choose the norm(s), dualize,
+solve by Hölder.* Otherwise it has no business inside a constrained optimizer.
+
+### 8.1 Momentum = shrinkage estimation of the linear functional
+The per-step program (P) minimizes $\langle G_t, \Delta\rangle$; but $G_t$
+is a noisy estimate of the true descent functional $g = \mathbb E[G]$. Choose
+instead the exponentially-weighted maximum-likelihood estimator
+
+$$
+M_t \;=\; \arg\min_m \sum_{s\le t} \mu^{\,t-s}\, \lVert m - G_s\rVert_F^2
+\;=\; (1-\mu)\sum_{s\le t} \mu^{\,t-s} G_s ,
+$$
+
+i.e. the EMA (Dion3's buffer at $f{=}1$ is this up to normalization, with its
+$M \leftarrow \mu M$ decay-after-use). Substituting $M_t$ for $G_t$ changes
+**only the coefficient of a linear objective** — every downstream piece
+(whitening, the $\varepsilon/2$ Hölder step, the tilts $2W\Lambda$, the dual
+ascent) is invariant to this substitution, because none of them depend on the
+objective being the instantaneous gradient. Hence momentum requires *no*
+recertification: the applied update is still exactly
+$-\tfrac{\varepsilon}{2}\operatorname{msign}(\cdot)C^{-1}$. At $f<1$,
+Dion3's error feedback is the same estimator with a low-rank observation
+operator: unapplied components remain in the state until observed —
+in our setting the observation operator must additionally annihilate the
+protected subspace, or the estimator accumulates exactly the motion the
+constraint exists to forbid (§ noted; f=1 sidesteps this).
+
+### 8.2 Per-neuron scaling = an intersected trust region, derived
+Adam's derivation, one level up: gradient noise is heteroscedastic across
+output neurons; let $v_i$ estimate the second moment of row $i$. A trust
+region that equalizes estimation *risk* rather than motion allots each neuron
+budget $\eta_i \propto 1/\sqrt{v_i}$. The derived program is the ball
+INTERSECTION
+
+$$
+\min_\Delta \langle M, \Delta\rangle
+\quad\text{s.t.}\quad
+\lVert W_Q \Delta^\top\rVert_{\mathrm{op}} \le \tfrac{\varepsilon}{2}
+\;\;\wedge\;\;
+\lVert e_i^\top \Delta\rVert \le c/\sqrt{v_i}\;\;\forall i .
+$$
+
+KKT: a matrix multiplier for the composed ball plus one scalar multiplier per
+neuron — no closed form for the exact intersection (same rank-obstruction
+flavor as §1). The tractable inner approximation, in the spirit of the
+half-split itself: (i) take the composed-ball solution, (ii) apply the
+diagonal reweighting $D^{-1} = \operatorname{diag}(1/(\sqrt{v_i}+\epsilon))$
+(Frobenius-rescaled: the budget is redistributed, not shrunk), (iii) project
+back onto the composed ball **along the ray** — i.e. rescale by
+$\min\!\big(1, \tfrac{\varepsilon/2}{\lVert W_Q \hat\Delta^\top\rVert}\big)$.
+Step (iii) is the exact Euclidean projection onto the ball along the search
+direction (one Dykstra half-step onto the intersection), so the applied update
+is feasible for BOTH constraint sets by construction. This is precisely the
+implemented `_apply_leg` + recertification: not a safety patch but the
+inner-approximate solution of the derived intersection program. (A purist
+would iterate (ii)–(iii) to the Dykstra fixed point; one step is our standing
+half-split philosophy of conservative inner approximations.)
+
+### 8.3 Gram Newton–Schulz = an exact algebraic rewriting (nothing to re-derive)
+Dion3 Thm 2: every Newton–Schulz iterate is an odd polynomial of the initial
+matrix, so all iterates commute and the recursion transfers to the small Gram
+$R = XX^\top$:
+$z_t = a I + b R_t + c R_t^2$, $R_{t+1} = R_t z_t^2$, $Q_{t+1} = z_t Q_t$,
+$\operatorname{msign}(X) \approx Q_T X$. Identical operator, fewer big-side
+FLOPs (ratio $\sim$ aspect); constraint semantics untouched. Verified to
+$<5\%$ of the Polar-Express output at our step counts, fp32, no restart
+needed.
+
+### 8.4 What was *not* derived and therefore *not* adopted
+Dion3's row-subset selection ($f<1$) and its $\eta\propto 1/\sqrt f$
+transfer rule are performance devices whose interaction with the protected
+subspace (via error feedback, §8.1) changes constraint semantics; they stay
+out until the annihilating observation operator is written down and tested.
