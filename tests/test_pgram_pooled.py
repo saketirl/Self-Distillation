@@ -170,3 +170,23 @@ def test_dion3_features_smoke():
     # momentum buffers exist and are finite
     n_bufs = sum(1 for st in opt.state.values() if "Mbuf" in st)
     assert n_bufs == 4
+
+
+def test_ball_holds_with_normuon_recert():
+    """NorMuon may redistribute within the eps/2 ball but never exceed it."""
+    named = make_params()
+    opt = make_opt(named, lr=1.0, momentum_mu=0.9, normuon_beta2=0.95)
+    WQ_pre = dict(named)["model.layers.0.self_attn.q_proj.weight"].detach().clone()
+    before = dict(named)["model.layers.0.self_attn.k_proj.weight"].detach().clone()
+    for i in range(3):                       # v-buffer warm so rescale is active
+        set_grads(named, seed=40 + i)
+        opt.step()
+    before = dict(named)["model.layers.0.self_attn.k_proj.weight"].detach().clone()
+    WQ_pre = dict(named)["model.layers.0.self_attn.q_proj.weight"].detach().clone()
+    set_grads(named, seed=50)
+    opt.step()
+    dK = (dict(named)["model.layers.0.self_attn.k_proj.weight"].detach() - before)
+    WQh = WQ_pre.view(HQ, DH, D).mT.float()
+    dKh = dK.view(HKV, DH, D).mT.float().repeat_interleave(GRP, 0)
+    ratio = float(torch.linalg.matrix_norm(WQh @ dKh.mT, ord=2).max()) / 0.5
+    assert ratio <= 1.10, ratio

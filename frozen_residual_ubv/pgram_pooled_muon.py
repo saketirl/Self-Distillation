@@ -146,9 +146,13 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
 
 
     # ---------------------------------------------------- dion3-style helpers
-    def _apply_leg(self, p, delta, lr):
+    def _apply_leg(self, p, delta, lr, recert=None):
         """NorMuon per-neuron second-moment normalization at nn.Linear row level
-        (rows = output neurons uniformly), Frobenius-rescaled, then apply."""
+        (rows = output neurons uniformly), Frobenius-rescaled, then BALL
+        RECERTIFICATION: NorMuon may only redistribute inside the eps/2 composed
+        trust region, never exceed it. `recert(delta2d) -> max composed-norm
+        ratio vs eps/2`; if > 1 the delta is shrunk to fit, restoring the exact
+        per-step guarantee the constraint design promises."""
         b2 = self.normuon_beta2
         if b2 > 0:
             st = self.state.setdefault(p, {})
@@ -161,6 +165,10 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
             st["normuon_v"] = v
             dn = delta / (v.sqrt() + 1e-8)
             delta = dn * (delta.norm() / dn.norm().clamp_min(1e-12))
+            if recert is not None:
+                ratio = float(recert(delta))
+                if ratio > 1.0:
+                    delta = delta / ratio
         self._apply(p, delta, lr)
 
     def _grad_or_momentum(self, p):
@@ -294,10 +302,31 @@ class PGramPooledMuon(CompositionalHalfSplitMuon):
 
             ok = all(torch.isfinite(x).all() for x in (dQ, dK, dO, dV))
             if ok:
-                self._apply_leg(p_Q, dQ.mT.reshape(H_q * d_h, d), lr)
-                self._apply_leg(p_K, dK.mT.reshape(H_kv * d_h, d), lr)
-                self._apply_leg(p_O, dO.permute(2, 0, 1, 3).reshape(d, H_q * d_h), lr)
-                self._apply_leg(p_V, dV.reshape(H_kv * d_h, d), lr)
+                WKr = WK.repeat_interleave(grp, 0)
+                WVr = WV.repeat_interleave(grp, 0)
+                WQf = WQ.flatten(0, 1)
+                WOf = WO.flatten(0, 1)
+
+                def _r_q(d2):
+                    dq = d2.view(H_q, d_h, d).mT.float()
+                    return self._op_norm_factored(dq, WKr).max() / half
+
+                def _r_k(d2):
+                    dk = d2.view(H_kv, d_h, d).mT.float().repeat_interleave(grp, 0)
+                    return self._op_norm_factored(WQf, dk).max() / half
+
+                def _r_o(d2):
+                    do = d2.view(d, H_q, d_h).permute(1, 0, 2).float()
+                    return self._op_norm_factored(do, WVr.mT).max() / half
+
+                def _r_v(d2):
+                    dv = d2.view(H_kv, d_h, d).float().repeat_interleave(grp, 0)
+                    return self._op_norm_factored(WOf, dv.mT).max() / half
+
+                self._apply_leg(p_Q, dQ.mT.reshape(H_q * d_h, d), lr, recert=_r_q)
+                self._apply_leg(p_K, dK.mT.reshape(H_kv * d_h, d), lr, recert=_r_k)
+                self._apply_leg(p_O, dO.permute(2, 0, 1, 3).reshape(d, H_q * d_h), lr, recert=_r_o)
+                self._apply_leg(p_V, dV.reshape(H_kv * d_h, d), lr, recert=_r_v)
                 self._decay_momentum(p_Q, p_K, p_O, p_V)
             else:
                 self.n_bad += 1
